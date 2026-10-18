@@ -1,9 +1,11 @@
 #include <array>
+#include <optional>
 #include <random>
 #include <string>
 #include <iostream>
 #include <stdexcept>
 #include <cassert>
+#include <vector>
 
 
 enum Action
@@ -21,15 +23,16 @@ struct State
     bool has_key;
 };
 
-struct StepResult
+struct Transition
 {
     State next_state;
     double reward;
     bool terminated;
+    std::optional<double> probability {std::nullopt};
 };
 
 
-int encode_state(const State& state, int width, int height)
+int encode_state(const State &state, int width, int height)
 {
     const int num_cells = width * height;
 
@@ -66,7 +69,7 @@ bool in_bounds(int x, int y)
 };
 
 bool is_wall(
-    const std::array<std::string, HEIGHT>& grid,
+    const std::array<std::string, HEIGHT> &grid,
     int x, int y
 )
 {
@@ -79,7 +82,7 @@ bool is_wall(
 };
 
 
-State move(const State& state, Action action)
+State move(const State &state, Action action)
 {
     State next_state = state;
     switch (action)
@@ -102,8 +105,8 @@ State move(const State& state, Action action)
 
 
 State move_if_allowed(
-    const std::array<std::string, HEIGHT>& grid,
-    const State& state, Action action
+    const std::array<std::string, HEIGHT> &grid,
+    const State &state, Action action
 )
 {
     State next_state {move(state, action)};
@@ -127,9 +130,9 @@ State move_if_allowed(
 }
 
 
-StepResult transition (
-    const std::array<std::string, HEIGHT>& grid,
-    const State& state, Action action
+Transition transition (
+    const std::array<std::string, HEIGHT> &grid,
+    const State &state, Action action
 )
 {
     State next_state {move_if_allowed(grid, state, action)};
@@ -150,13 +153,15 @@ private:
     double slip_prob_;
     std::mt19937 rng_;
 
-    // Action sample_action(Action intended_action);
+    Action sample_action(Action intended_action);
 
 public:
     KeyDoorEnv(double slip_prob, std::uint32_t seed);
     State reset();
-    StepResult step(Action action);
-    Action sample_action(Action intended_action);
+    Transition step(Action action);
+
+    // Action sample_action(Action intended_action); // Uncomment for testing
+    // std::array<std::string, HEIGHT> grid_;        // Uncomment for testing
 };
 
 KeyDoorEnv::KeyDoorEnv(double slip_prob, std::uint32_t seed)
@@ -204,7 +209,31 @@ Action KeyDoorEnv::sample_action(Action intended_action)
     return actual_action;
 }
 
-StepResult KeyDoorEnv::step(Action action)
+std::vector<Transition> transition_probs(
+    const std::array<std::string, HEIGHT> &grid,
+    const State &state,
+    Action intended_action,
+    double slip_prob
+)
+{
+    std::vector<Transition> outcomes {};
+    outcomes.reserve(4);
+
+    for (int i = 0; i < 4; ++i)
+    {
+        Action action = static_cast<Action>(i);
+        Transition outcome = transition(grid, state, action);
+
+        outcome.probability =
+            slip_prob / 4
+            + (action == intended_action ? 1.0 - slip_prob : 0.0);
+
+        outcomes.push_back(outcome);
+    }
+    return outcomes;
+}
+
+Transition KeyDoorEnv::step(Action action)
 {
     if (terminated_)
     {
@@ -212,7 +241,7 @@ StepResult KeyDoorEnv::step(Action action)
     }
 
     Action actual_action = sample_action(action);
-    StepResult result = transition(grid_, state_, actual_action);
+    Transition result = transition(grid_, state_, actual_action);
 
     state_ = result.next_state;
     terminated_ = result.terminated;
@@ -222,26 +251,35 @@ StepResult KeyDoorEnv::step(Action action)
 
 int main()
 {
-    KeyDoorEnv env{0.2, 42};
-
-    constexpr int NUM_SAMPLES = 100000;
-
-    std::array<int, 4> counts{};
-
-    for (int i = 0; i < NUM_SAMPLES; ++i)
+    std::array<std::string, HEIGHT> grid
     {
-        Action actual = env.sample_action(Action::Right);
+    "########",
+    "#S..#..#",
+    "#...#..#",
+    "#...#..#",
+    "#K..D.G#",
+    "#...#..#",
+    "#...#..#",
+    "########"
+    };
 
-        int action_id = static_cast<int>(actual);
-        counts.at(action_id)++;
-    }
+    State state{1, 1, false};
+
+    auto outcomes = transition_probs(
+        grid,
+        state,
+        Action::Right,
+        0.2
+    );
+
+    double total_probability {};
 
     for (int i = 0; i < 4; ++i)
     {
-        double frequency =
-            static_cast<double>(counts.at(i)) / NUM_SAMPLES;
+        total_probability = total_probability + outcomes[i].probability.value();
+    };
 
-        std::cout << "Action " << i
-                  << ": " << frequency << '\n';
-    }
+    assert(std::abs(total_probability - 1.0) < 1e-12);
+
+
 }
